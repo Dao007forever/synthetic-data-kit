@@ -39,10 +39,10 @@ class QAGenerator:
         
         # Get summary prompt from config
         prompt = get_prompt(self.config, "summary")
-        max_context_length = self.generation_config.get("max_context_length", 8000)
+        
         messages = [
             {"role": "system", "content": prompt},
-            {"role": "user", "content": document_text[0:max_context_length]}
+            {"role": "user", "content": document_text}
         ]
         
         summary = self.client.chat_completion(
@@ -53,6 +53,71 @@ class QAGenerator:
         if verbose:
             print(f"Summary generated ({len(summary)} chars)")
         return summary
+    
+    def generate_self_edits(self, document_text: str) -> List[Dict[str, str]]:
+        verbose = os.environ.get('SDK_VERBOSE', 'false').lower() == 'true'
+        if verbose:
+            print("Generating document self-edits...")
+        
+        # Get self-edits prompt from config
+        prompt_template = get_prompt(self.config, "self_edit")
+        prompt = prompt_template.format(
+            passage = document_text
+        )
+        
+        messages = [
+            {"role": "system", "content": prompt},
+        ]
+        
+        self_edits = self.client.chat_completion(
+            messages, 
+            temperature=0.5  # Use higher temperature for self-edits
+        )
+        
+        if verbose:
+            print(f"Self-edits generated ({len(results)} chars)")
+        
+        print(self_edits)
+        
+        return parse_qa_pairs(self_edits)
+    
+    def rewrite_self_edits(self, document_text: str, self_edits: str) -> List[Dict[str, str]]:
+        verbose = os.environ.get('SDK_VERBOSE', 'false').lower() == 'true'
+        if verbose:
+            print("Rewrite document self-edits...")
+        
+        # Get self-edits prompt from config
+        prompt_template = get_prompt(self.config, "self_edit_rewrite")
+        
+        self_edits = json.loads(self_edits)["self-edits"]
+        
+        batch_messages = [
+            [
+                {"role": "system", "content": prompt_template.format(context=document_text, implication=self_edit["text"])},
+            ]
+            for self_edit in self_edits
+        ]
+        
+        batch_responses = self.client.batch_completion(
+            batch_messages,
+            temperature=0.5,
+            batch_size=len(batch_messages)
+        )
+        print(batch_responses)
+        
+        results = []
+        for i, response in enumerate(batch_responses):
+            # Skipping ```json\n and \n```
+            response = response[8:-4]
+            print(response)
+            results.append(json.loads(response))
+            
+        print(results)
+        
+        if verbose:
+            print(f"Self-edits generated ({len(results)} chars)")
+        
+        return results
     
     def generate_qa_pairs(self, 
                         document_text: str, 
@@ -123,12 +188,6 @@ class QAGenerator:
         
         # Process in batches
         for batch_start in range(0, len(chunks), batch_size):
-            # Check if we've already generated enough pairs
-            if len(all_qa_pairs) >= num_pairs:
-                if verbose:
-                    print(f"Reached target of {num_pairs} pairs. Stopping processing.")
-                break
-                
             batch_end = min(batch_start + batch_size, len(chunks))
             batch_messages = all_messages[batch_start:batch_end]
             current_batch_size = len(batch_messages)
@@ -152,35 +211,16 @@ class QAGenerator:
                 
                 # Process each response in the batch
                 for j, response in enumerate(batch_responses):
-                    # Check if we've reached the target before processing more
-                    if len(all_qa_pairs) >= num_pairs:
-                        if verbose:
-                            print(f"  Reached target of {num_pairs} pairs. Stopping batch processing.")
-                        break
-                        
                     chunk_index = batch_start + j
                     chunk_pairs = parse_qa_pairs(response)
+                    all_qa_pairs.extend(chunk_pairs)
                     
-                    # Only add pairs up to the target limit
-                    remaining_pairs = num_pairs - len(all_qa_pairs)
-                    if remaining_pairs > 0:
-                        pairs_to_add = chunk_pairs[:remaining_pairs]
-                        all_qa_pairs.extend(pairs_to_add)
-                        
-                        if verbose:
-                            print(f"  Generated {len(pairs_to_add)} pairs from chunk {chunk_index+1} (total: {len(all_qa_pairs)}/{num_pairs})")
-                    
-                    # Break if we've reached the target
-                    if len(all_qa_pairs) >= num_pairs:
-                        break
+                    if verbose:
+                        print(f"  Generated {len(chunk_pairs)} pairs from chunk {chunk_index+1}")
                 
                 # Update progress bar if in verbose mode
                 if progress_ctx and generate_task:
                     progress_ctx.update(generate_task, advance=current_batch_size)
-                
-                # Break outer loop if we've reached the target
-                if len(all_qa_pairs) >= num_pairs:
-                    break
                 
             except Exception as e:
                 if verbose:
@@ -200,7 +240,7 @@ class QAGenerator:
             print("Batch processing complete.")
         
         # Always print summary information, even in non-verbose mode
-        print(f"Generated {len(all_qa_pairs)} QA pairs total (requested: {num_pairs})")
+        print(f"Generated {len(all_qa_pairs)} QA pairs total")
         return all_qa_pairs
     
     def rate_qa_pairs(self, 

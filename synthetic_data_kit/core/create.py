@@ -31,8 +31,6 @@ def process_file(
     num_pairs: Optional[int] = None,
     verbose: bool = False,
     provider: Optional[str] = None,
-    chunk_size: Optional[int] = None,
-    chunk_overlap: Optional[int] = None,
 ) -> str:
     """Process a file to generate content
     
@@ -60,12 +58,6 @@ def process_file(
         api_base=api_base,
         model_name=model
     )
-    
-    # Override chunking config if provided
-    if chunk_size is not None:
-        client.config.setdefault('generation', {})['chunk_size'] = chunk_size
-    if chunk_overlap is not None:
-        client.config.setdefault('generation', {})['overlap'] = chunk_overlap
     
     # Debug: Print which provider is being used
     print(f"L Using {client.provider} provider")
@@ -127,6 +119,36 @@ def process_file(
         output_path = os.path.join(output_dir, f"{base_name}_summary.json")
         with open(output_path, 'w', encoding='utf-8') as f:
             json.dump({"summary": summary}, f, indent=2)
+        
+        return output_path
+    
+    elif content_type == "self-edits":
+        generator = QAGenerator(client, config_path)
+
+        document_text = read_json(file_path)
+        
+        summary = generator.generate_self_edits(document_text)
+        
+        # Save output
+        output_path = os.path.join(output_dir, f"{base_name}_self_edits.json")
+        with open(output_path, 'w', encoding='utf-8') as f:
+            json.dump({"self-edits": summary}, f, indent=2)
+        
+        return output_path
+    
+    elif content_type == "self-edits-rewrite":
+        generator = QAGenerator(client, config_path)
+
+        document_path, self_edit_path = file_path.split(",")
+        document_text = read_json(document_path)
+        self_edit_path = read_json(self_edit_path)
+        
+        summary = generator.rewrite_self_edits(document_text, self_edit_path)
+        
+        # Save output
+        output_path = os.path.join(output_dir, f"{base_name}_rewrite.json")
+        with open(output_path, 'w', encoding='utf-8') as f:
+            json.dump({"self-edits": summary}, f, indent=2)
         
         return output_path
     
