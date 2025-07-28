@@ -6,12 +6,20 @@
 # CLI Logic for synthetic-data-kit
 
 import os
+import sys
 import typer
 from pathlib import Path
 from typing import Optional
 import requests
 from rich.console import Console
 from rich.table import Table
+
+# Absolute path to the directory you want to add
+data_kit = '/home/jovyan/synthetic-data-kit'
+
+# Add the path if it's not already there
+if data_kit not in sys.path:
+    sys.path.insert(0, data_kit)
 
 from synthetic_data_kit.utils.config import load_config, get_vllm_config, get_openai_config, get_llm_provider, get_path_config
 from synthetic_data_kit.core.context import AppContext

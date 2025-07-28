@@ -31,6 +31,9 @@ def process_file(
     num_pairs: Optional[int] = None,
     verbose: bool = False,
     provider: Optional[str] = None,
+    chunk_size: Optional[int] = None,
+    chunk_overlap: Optional[int] = None,
+    rolling_summary: Optional[bool] = False,
 ) -> str:
     """Process a file to generate content
     
@@ -59,6 +62,12 @@ def process_file(
         model_name=model
     )
     
+    # Override chunking config if provided
+    if chunk_size is not None:
+        client.config.setdefault('generation', {})['chunk_size'] = chunk_size
+    if chunk_overlap is not None:
+        client.config.setdefault('generation', {})['overlap'] = chunk_overlap
+    
     # Debug: Print which provider is being used
     print(f"L Using {client.provider} provider")
     
@@ -81,7 +90,8 @@ def process_file(
         result = generator.process_document(
             document_text,
             num_pairs=num_pairs,
-            verbose=verbose
+            verbose=verbose,
+            rolling_summary=rolling_summary
         )
         
         # Save output
