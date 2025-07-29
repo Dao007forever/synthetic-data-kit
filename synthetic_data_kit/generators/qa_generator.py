@@ -31,24 +31,51 @@ class QAGenerator:
         self.generation_config = get_generation_config(self.config)
         self.curate_config = get_curate_config(self.config)
     
-    def generate_summary(self, document_text: str) -> str:
+    def generate_summary(self, 
+                         document_text: str, 
+                         rolling_summary: Optional[bool] = False) -> str:
         """Generate a summary of the document"""
         verbose = os.environ.get('SDK_VERBOSE', 'false').lower() == 'true'
         if verbose:
             print("Generating document summary...")
         
-        # Get summary prompt from config
+        # Get summary prompt and params from config
         prompt = get_prompt(self.config, "summary")
-        
-        messages = [
-            {"role": "system", "content": prompt},
-            {"role": "user", "content": document_text}
-        ]
-        
-        summary = self.client.chat_completion(
-            messages, 
-            temperature=0.1  # Use lower temperature for summaries
-        )
+        max_context_length = self.generation_config.get("max_context_length", 8000)
+        summary_overlap = self.generation_config.get("summary_overlap", 0)
+
+        if rolling_summary:
+            summary_per_chunk = []
+            #split text into long chunks for summarization
+            chunks = split_into_chunks(document_text,
+                                       chunk_size=max_context_length,
+                                       overlap=summary_overlap)
+
+            for chunk in chunks:
+                messages = [
+                    {"role": "system", "content": prompt},
+                    {"role": "user", "content": chunk}
+                ]
+                new_summary = self.client.chat_completion(
+                    messages, 
+                    temperature=0.1  # Use lower temperature for summaries
+                )
+                summary_per_chunk.append(new_summary)
+
+            summary = " .".join(summary_per_chunk)
+            # Summarize again to reduce overall length and redundancy
+            summary = self.generate_summary(summary,
+                                            rolling_summary=False)
+        else:
+            messages = [
+                {"role": "system", "content": prompt},
+                {"role": "user", "content": document_text[0:max_context_length]}
+            ]
+            
+            summary = self.client.chat_completion(
+                messages, 
+                temperature=0.1  # Use lower temperature for summaries
+            )
         
         if verbose:
             print(f"Summary generated ({len(summary)} chars)")
@@ -188,6 +215,12 @@ class QAGenerator:
         
         # Process in batches
         for batch_start in range(0, len(chunks), batch_size):
+            # Check if we've already generated enough pairs
+            if len(all_qa_pairs) >= num_pairs:
+                if verbose:
+                    print(f"Reached target of {num_pairs} pairs. Stopping processing.")
+                break
+                
             batch_end = min(batch_start + batch_size, len(chunks))
             batch_messages = all_messages[batch_start:batch_end]
             current_batch_size = len(batch_messages)
@@ -211,16 +244,35 @@ class QAGenerator:
                 
                 # Process each response in the batch
                 for j, response in enumerate(batch_responses):
+                    # Check if we've reached the target before processing more
+                    if len(all_qa_pairs) >= num_pairs:
+                        if verbose:
+                            print(f"  Reached target of {num_pairs} pairs. Stopping batch processing.")
+                        break
+                        
                     chunk_index = batch_start + j
                     chunk_pairs = parse_qa_pairs(response)
-                    all_qa_pairs.extend(chunk_pairs)
                     
-                    if verbose:
-                        print(f"  Generated {len(chunk_pairs)} pairs from chunk {chunk_index+1}")
+                    # Only add pairs up to the target limit
+                    remaining_pairs = num_pairs - len(all_qa_pairs)
+                    if remaining_pairs > 0:
+                        pairs_to_add = chunk_pairs[:remaining_pairs]
+                        all_qa_pairs.extend(pairs_to_add)
+                        
+                        if verbose:
+                            print(f"  Generated {len(pairs_to_add)} pairs from chunk {chunk_index+1} (total: {len(all_qa_pairs)}/{num_pairs})")
+                    
+                    # Break if we've reached the target
+                    if len(all_qa_pairs) >= num_pairs:
+                        break
                 
                 # Update progress bar if in verbose mode
                 if progress_ctx and generate_task:
                     progress_ctx.update(generate_task, advance=current_batch_size)
+                
+                # Break outer loop if we've reached the target
+                if len(all_qa_pairs) >= num_pairs:
+                    break
                 
             except Exception as e:
                 if verbose:
@@ -240,7 +292,7 @@ class QAGenerator:
             print("Batch processing complete.")
         
         # Always print summary information, even in non-verbose mode
-        print(f"Generated {len(all_qa_pairs)} QA pairs total")
+        print(f"Generated {len(all_qa_pairs)} QA pairs total (requested: {num_pairs})")
         return all_qa_pairs
     
     def rate_qa_pairs(self, 
@@ -331,27 +383,33 @@ class QAGenerator:
         print(f"Average score: {metrics['avg_score']}")
         return rated_pairs, metrics
     
-    def process_document(self, 
-                       document_text: str, 
-                       num_pairs: int = 25, 
-                       verbose: bool = False) -> Dict[str, Any]:
-        """Process a document to generate QA pairs without rating"""
+    def process_documents(self,
+                        documents: List[Dict[str, Any]],
+                        num_pairs: int = 25,
+                        verbose: bool = False,
+                        rolling_summary: Optional[bool] = False) -> Dict[str, Any]:
+        """Process a list of documents to generate QA pairs without rating"""
         # Set the verbose environment variable
         if verbose:
             os.environ['SDK_VERBOSE'] = 'true'
         else:
             os.environ['SDK_VERBOSE'] = 'false'
-        
+
+        all_qa_pairs = []
+        full_text = " ".join([doc["text"] for doc in documents])
+
         # Generate summary
-        summary = self.generate_summary(document_text)
-        
+        summary = self.generate_summary(full_text, rolling_summary=rolling_summary)
+
         # Generate QA pairs
-        qa_pairs = self.generate_qa_pairs(document_text, summary, num_pairs=num_pairs)
-        
+        qa_pairs = self.generate_qa_pairs(full_text, summary, num_pairs=num_pairs)
+
+        all_qa_pairs.extend(qa_pairs)
+
         # Prepare result - no rating at this stage
         result = {
             "summary": summary,
-            "qa_pairs": qa_pairs
+            "qa_pairs": all_qa_pairs
         }
-        
+
         return result

@@ -74,12 +74,16 @@ def process_file(
     # Generate base filename for output
     base_name = os.path.splitext(os.path.basename(file_path))[0]
     
+    if file_path.endswith(".lance"):
+        dataset = load_lance_dataset(file_path)
+        documents = dataset.to_table().to_pylist()
+    else:
+        documents = [{"text": read_json(file_path), "image": None}]
+    
     # Generate content based on type
     if content_type == "qa":
         generator = QAGenerator(client, config_path)
 
-        document_text = read_json(file_path)
-        
         # Get num_pairs from args or config
         if num_pairs is None:
             config = client.config
@@ -87,8 +91,8 @@ def process_file(
             num_pairs = generation_config.get("num_pairs", 25)
         
         # Process document
-        result = generator.process_document(
-            document_text,
+        result = generator.process_documents(
+            documents,
             num_pairs=num_pairs,
             verbose=verbose,
             rolling_summary=rolling_summary
@@ -97,15 +101,6 @@ def process_file(
         # Save output
         output_path = os.path.join(output_dir, f"{base_name}_qa_pairs.json")
         print(f"Saving result to {output_path}")
-        
-        # First, let's save a basic test file to confirm the directory is writable
-        test_path = os.path.join(output_dir, "test_write.json")
-        try:
-            with open(test_path, 'w', encoding='utf-8') as f:
-                f.write('{"test": "data"}')
-            print(f"Successfully wrote test file to {test_path}")
-        except Exception as e:
-            print(f"Error writing test file: {e}")
             
         # Now save the actual result
         try:
@@ -120,10 +115,10 @@ def process_file(
     elif content_type == "summary":
         generator = QAGenerator(client, config_path)
 
-        document_text = read_json(file_path)
+        full_text = " ".join([doc["text"] for doc in documents])
         
         # Generate just the summary
-        summary = generator.generate_summary(document_text)
+        summary = generator.generate_summary(full_text)
         
         # Save output
         output_path = os.path.join(output_dir, f"{base_name}_summary.json")
@@ -134,10 +129,8 @@ def process_file(
     
     elif content_type == "self-edits":
         generator = QAGenerator(client, config_path)
-
-        document_text = read_json(file_path)
         
-        summary = generator.generate_self_edits(document_text)
+        summary = generator.generate_self_edits(documents[0]["text"])
         
         # Save output
         output_path = os.path.join(output_dir, f"{base_name}_self_edits.json")
