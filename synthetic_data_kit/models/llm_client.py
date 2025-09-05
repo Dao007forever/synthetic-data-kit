@@ -175,8 +175,8 @@ class LLMClient:
                     model=self.model,
                     messages=messages,
                     temperature=temperature,
-                    max_tokens=max_tokens,
-                    top_p=top_p
+                    max_completion_tokens=max_tokens,
+                    #top_p=top_p # not supported in o-series
                 )
                 
                 if verbose:
@@ -372,7 +372,7 @@ class LLMClient:
                     model=self.model,
                     messages=messages,
                     temperature=temperature,
-                    max_tokens=max_tokens,
+                    max_completion_tokens=max_tokens,
                     top_p=top_p
                 )
                 
@@ -513,7 +513,7 @@ class LLMClient:
                     task = self._process_message_async(
                         messages=messages,
                         temperature=temperature,
-                        max_tokens=max_tokens,
+                        max_completion_tokens=max_tokens,
                         top_p=top_p,
                         verbose=verbose,
                         debug_mode=debug_mode

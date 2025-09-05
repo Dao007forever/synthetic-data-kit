@@ -81,6 +81,33 @@ class QAGenerator:
             print(f"Summary generated ({len(summary)} chars)")
         return summary
     
+    def generate_kg(self, document_text: str) -> List[Dict[str, str]]:
+        verbose = os.environ.get('SDK_VERBOSE', 'false').lower() == 'true'
+        if verbose:
+            print("Generating KG...")
+        
+        # Get kg prompt from config
+        prompt_template = get_prompt(self.config, "kg_generation")
+        prompt = prompt_template.format(
+            text = document_text
+        )
+        
+        messages = [
+            # role "user" for Claude
+            # role "system" for OpenAI
+            {"role": "system", "content": prompt},
+        ]
+        
+        triplets = self.client.chat_completion(
+            messages, 
+            temperature=1  # Use higher temperature for self-edits, not supported for o-series
+        )
+        
+        if verbose:
+            print(f"KG generated ({len(triplets)} triplets)")
+
+        return parse_qa_pairs(triplets)
+    
     def generate_self_edits(self, document_text: str) -> List[Dict[str, str]]:
         verbose = os.environ.get('SDK_VERBOSE', 'false').lower() == 'true'
         if verbose:
@@ -98,11 +125,11 @@ class QAGenerator:
         
         self_edits = self.client.chat_completion(
             messages, 
-            temperature=0.5  # Use higher temperature for self-edits
+            temperature=self.generation_config.get("temperature", 0.7)
         )
         
         if verbose:
-            print(f"Self-edits generated ({len(results)} chars)")
+            print(f"Self-edits generated ({len(self_edits)} self-edits)")
         
         print(self_edits)
         
@@ -118,26 +145,36 @@ class QAGenerator:
         
         self_edits = json.loads(self_edits)["self-edits"]
         
-        batch_messages = [
-            [
-                {"role": "system", "content": prompt_template.format(context=document_text, implication=self_edit["text"])},
-            ]
-            for self_edit in self_edits
-        ]
-        
-        batch_responses = self.client.batch_completion(
-            batch_messages,
-            temperature=0.5,
-            batch_size=len(batch_messages)
-        )
-        print(batch_responses)
-        
         results = []
-        for i, response in enumerate(batch_responses):
-            # Skipping ```json\n and \n```
-            response = response[8:-4]
-            print(response)
-            results.append(json.loads(response))
+        batch_size = 5
+        
+        for batch_start in range(0, len(self_edits), batch_size):
+            batch_end = min(batch_start + batch_size, len(self_edits))
+            print(f"Processing {batch_start} - {batch_end}. Total length: {len(self_edits)}")
+            
+            batch_messages = [
+                [
+                    {"role": "system", "content": prompt_template.format(context=document_text, implication=self_edit["text"])},
+                ]
+                for self_edit in self_edits[batch_start:batch_end]
+            ]
+            
+            batch_responses = self.client.batch_completion(
+                batch_messages,
+                temperature=self.generation_config.get("temperature", 0.7),
+                batch_size=len(batch_messages)
+            )
+
+            for _, response in enumerate(batch_responses):
+                # Skipping ```json\n and \n```
+                try:
+                    if response.startswith("["):
+                        results += json.loads(response)
+                    else:
+                        results += json.loads(response[8:-4])
+                except Exception as e:
+                    print(f"Failed for {response}")
+                    raise e
             
         print(results)
         

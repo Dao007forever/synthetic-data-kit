@@ -77,7 +77,7 @@ def process_file(
     if file_path.endswith(".lance"):
         dataset = load_lance_dataset(file_path)
         documents = dataset.to_table().to_pylist()
-    else:
+    elif "," not in file_path:
         documents = [{"text": read_json(file_path), "image": None}]
     
     # Generate content based on type
@@ -124,6 +124,18 @@ def process_file(
         output_path = os.path.join(output_dir, f"{base_name}_summary.json")
         with open(output_path, 'w', encoding='utf-8') as f:
             json.dump({"summary": summary}, f, indent=2)
+        
+        return output_path
+    
+    elif content_type == "kg-generation":
+        generator = QAGenerator(client, config_path)
+        
+        summary = generator.generate_kg(documents[0]["text"])
+        
+        # Save output
+        output_path = os.path.join(output_dir, f"{base_name}_kg.json")
+        with open(output_path, 'w', encoding='utf-8') as f:
+            json.dump({"kg": summary}, f, indent=2)
         
         return output_path
     
